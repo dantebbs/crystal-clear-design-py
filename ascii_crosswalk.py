@@ -205,7 +205,7 @@ class ascii_crosswalk:
         curses.init_pair(6, curses.COLOR_YELLOW, curses.COLOR_YELLOW)
         self.colors["yel_yel"] = curses.color_pair(6)
         curses.init_pair(7, curses.COLOR_BLACK, curses.COLOR_BLACK)
-        self.colors["blk_blk"] = curses.color_pair(7)
+        self.colors["blk"] = curses.color_pair(7)
         curses.curs_set(False)
         curses.cbreak()
         curses.raw()
@@ -243,6 +243,13 @@ class ascii_crosswalk:
         self.status_pad_lr_x = self.scrn_wid - 1
         #print(f"self.scrn_hgt={self.scrn_hgt}")
 
+        title_x = self.scrn_wid - 33 - 2
+        self.display_win.addstr(0, title_x, "-------------------------------", self.colors["cya"])
+        self.display_win.addstr(1, title_x, "|  Crosswalk Light Simulator  |", self.colors["cya"])
+        self.display_win.addstr(2, title_x, "-------------------------------", self.colors["cya"])
+        self.display_win.addstr(4, title_x, "Press 'b' to request a crossing", self.colors["cya"])
+        self.display_win.addstr(5, title_x, "Press 'esc' to exit simulation",  self.colors["cya"])
+        
         #self.stdscr.getkey()
         #self.stdscr.nodelay(True)
         return
@@ -305,7 +312,7 @@ class ascii_crosswalk:
                 y += 1
             self.display_win.addstr(6, 5, " ", self.colors["yel_yel"])
 
-        self.display_win.refresh()
+        #self.display_win.refresh()
         return
 
     def draw_hand(self, color) -> None:
@@ -349,26 +356,24 @@ class ascii_crosswalk:
         count_posn_1s_y = hand_posn_y
         count_posn_1s_x = count_posn_10s_x + 10
 
+        self.draw_walk(self.colors["blk"])
+        self.draw_hand(self.colors["blk"])
         if self.ped_light_color == "red":
-            self.draw_walk(self.colors["blk_blk"])
             self.draw_hand(self.colors["red"])
         elif self.ped_light_color == "yel":
-            self.draw_walk(self.colors["blk_blk"])
             self.draw_hand(self.colors["yel"])
         elif self.ped_light_color == "grn":
-            self.draw_hand(self.colors["blk_blk"])
             self.draw_walk(self.colors["grn"])
 
         # Blank any currently drawn digits.
-        self.draw_count(count_posn_10s_y, count_posn_10s_x, 8, self.colors["blk_blk"])
-        self.draw_count(count_posn_1s_y,  count_posn_1s_x,  8, self.colors["blk_blk"])
-
+        self.draw_count(count_posn_10s_y, count_posn_10s_x, 8, self.colors["blk"])
+        self.draw_count(count_posn_1s_y,  count_posn_1s_x,  8, self.colors["blk"])
         if self.ped_count_down_s > -1:
             tens_digit = int(self.ped_count_down_s / 10)
             ones_digit = int(self.ped_count_down_s - (tens_digit * 10))
             self.draw_count(count_posn_10s_y, count_posn_10s_x, tens_digit, self.colors["yel"])
             self.draw_count(count_posn_1s_y,  count_posn_1s_x,  ones_digit, self.colors["yel"])
         
-        self.display_win.refresh()
+        #self.display_win.refresh()
         return
 

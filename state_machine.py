@@ -102,9 +102,16 @@ class timer_ms:
                 # event to avoid complications of "overlapping" timers.
             self.owner_machine.enqueue_event(self.event)
 
-# Wanted a 1-sec watchdog, but have to divide by 15.
+    def get_id(self) -> int:
+        return self.timer_id
+
+    def get_evt(self) -> str:
+        return self.event
+
 # See note below about minimum sleep time.
-watchdog_period_ms = int(1000 / 15)
+timer_resolution_ms = 20
+# Do a 1-sec watchdog, but divide by 20 because of tick resolution.
+watchdog_period_ms = int(1000 / timer_resolution_ms)
 class timer_manager:
     def __init__(self) -> None:
         self.timers = []
@@ -117,12 +124,12 @@ class timer_manager:
 
     def run_timers(self) -> None:
         while (not self.quit_flag):
-            # Wait 15 milliseconds.
+            # Wait 20 milliseconds.
             # A 1-ms time was desired, but it turns out that on Windows 10 and
             # python 3.10.9, the minimum sleep time is somewhere between 10 ms
             # and 13 ms, so we have to use larger chunks and suffer the loss
             # in resolution.
-            time.sleep(0.015)
+            time.sleep(timer_resolution_ms / 1000)
             
             # Check for time-out on each active timer.
             for timer in self.timers:
@@ -131,7 +138,7 @@ class timer_manager:
             # Make sure the thread hasn't been abandoned.
             self.watchdog_ms -= 1
             if self.watchdog_ms <= 0:
-                print(f"Error: Timer thread exiting due to watchdog!")
+                print(f"Error: Timer thread exiting because process_events() wasn't called often enough.")
                 self.quit_flag = True
 
     def add_timer(self, owner_machine: object, event: str, period_ms: int, repetitions = 1) -> int:
@@ -147,6 +154,20 @@ class timer_manager:
         self.timers.remove(old_timer)
         return
         
+    def rem_timer_by_id(self, timer_id: int) -> bool:
+        for timer in self.timers:
+            if timer.get_id() == timer_id:
+                self.rem_timer(timer)
+                return True
+        return False
+
+    def rem_timer_by_evt(self, event: str) -> bool:
+        for timer in self.timers:
+            if timer.get_evt() == event:
+                self.rem_timer(timer)
+                return True
+        return False
+
     def feed_dog(self) -> None:
         global watchdog_period_ms
         self.watchdog_ms = watchdog_period_ms
@@ -243,15 +264,23 @@ class state_machine:
         return
 
     # Adds a timer and automatically starts it. The indicated event will be produced
-    # when the specified time has elapsed after this call.
+    # when the specified time has elapsed after this call (unless it is removed).
     def add_timer(self, event: str, period_ms: int, repetitions = 1) -> None:
-        self.timer_manager.add_timer(self, event, period_ms, repetitions)
-        return
+        timer_id = self.timer_manager.add_timer(self, event, period_ms, repetitions)
+        return timer_id
 
     def rem_timer(self, dead_timer: timer_ms) -> None:
         self.timer_manager.rem_timer(dead_timer)
         return
-        
+
+    def rem_timer_by_id(self, timer_id: int) -> None:
+        self.timer_manager.rem_timer_by_id(timer_id)
+        return
+
+    def rem_timer_by_evt(self, event: str) -> None:
+        self.timer_manager.rem_timer_by_evt(event)
+        return
+
     # This is used to signal to the state machine that a new event has
     # occurred and needs to be processed.
     #
@@ -277,14 +306,14 @@ class state_machine:
         return ret_val
 
     # Go through the queued events and process them.
-    # This must be called on a regular basis. Somewhere between 1 and 100 ms
+    # This must be called on a regular basis. Somewhere between 20 and 200 ms
     # period is usually good.
     #
     # Side-effects:
     # * The state machine may be in a new state on return.
     # * Functions outside of the state machine (actions) may get called.
-    # * The state machine may pass through multiple states and emit
-    #   multiple actions during this call.
+    # * The state machine may pass through multiple states and run many
+    #   actions at different levels in the hierarchy during this call.
     #
     # returns: True if the machine is properly defined.
     def process_events(self) -> bool:
@@ -321,10 +350,12 @@ class state_machine:
 
         if process_result != "":
             # TODO: Add the recursive descent into sub-states.
+            # TODO: Decide if this should move to the transition execution section.
             # We are just completing a transition into a new state.
             self.curr_state = self.get_state_by_path(process_result)
             # Run the new state's entry functions.
-            self.curr_state.enter()
+            self.curr_state = self.curr_state.enter()
+
         self.last_processing_time = datetime.now().timestamp()
         
         self.events_lock.release()
@@ -334,10 +365,8 @@ class state_machine:
         requested_state = None
         curr_search_state = self.root_state
         path_states = state_path.split('.')
-        if len(path_states) == 0:
-            return requested_state
             
-        level_searching = 0
+        level_searching = 1
         while level_searching < len(path_states):
             sub_state = curr_search_state.get_sub_state(path_states[level_searching])
             if sub_state:

@@ -90,10 +90,12 @@ class debug_flags_cl:
 # For the "machine_parse" flag, it must be set before you instantiate state_machine(...).
 debug_flags = debug_flags_cl()
 debug_flags.set("use_level_indenting")
-#debug_flags.set("use_full_paths")
+#debug_flags.set("show_short_state_names")
 #debug_flags.set("machine_parse")
 #debug_flags.set("execution_details") # This one is verbose!
 #debug_flags.get("activation_checks")
+debug_flags.set("entry_exit")
+debug_flags.set("actions_taken")
 
 
 # A convenience routine to search for functions of the given names.
@@ -115,24 +117,22 @@ def run_user_functions(user_funcs: list, callback_module: object) -> bool:
     all_funcs_returned_true = True
 
     for potential_function in user_funcs:
-        #print(f"potential_function={potential_function}")
         # The function and any parameters must be in valid python syntax.
         # Check that while simultaneously breaking out the function name
         # and the parameters.
         match = re.search("^([a-zA-Z_]\w*)\((.*(,.*)*)\)$", potential_function)
         if match:
             function_name = match.group(1)
-            #print(f"Fn={function_name}")
             # Validate the parameters? This might be handy, but it might be overkill, too.
             # param_match = re.search("^([a-zA-Z_]\w*)|(\".*\")|(\'.*\')|(0x[0-9a-fA-F]+)|([+\-]?\d+)$")
             params = match.group(2)
-            #print(f"  Parms={params}")
+            debug_flags.print("actions_taken", f"  Calling {function_name}({params})\n")
 
             func = getattr(callback_module, function_name)
             if func:
                 func(params)
-            #else:
-            #    raise NotImplementedError("Function %s not implemented" % function_name)
+            else:
+                raise NotImplementedError(f"Function {function_name}() not implemented!")
 
     return all_funcs_returned_true
 
@@ -158,7 +158,7 @@ class transition:
         assert num_transitions > 0
 
         if "dest" not in transition_definition:
-            assert not f"Error! Invalid transition \"{self.event_name} from state {self.source_state.get_name()}\""
+            assert not f"Error! Invalid transition \"{self.event_name} from state {self.source_state.get_path()}\""
             return
 
         self.event_name = event_name
@@ -295,13 +295,28 @@ class state:
 
         return
 
-    def enter(self) -> None:
-        #print(f"Entering state \"{self.get_name()}\".")
+    # Returns a reference to itself (if no further state change), or to the new
+    # state, if it auto-enters into a sub-state.
+    def enter(self) -> object:
+        debug_flags.print("enter_exit", f"[{self.get_path()}] Entering\n")
+
         run_user_functions(self.entry_funcs, self.callback_module)
-        return
+        return_state = self
+
+        # In this newly entered state, check to see if there is a sub-state to auto-
+        # transition in to.
+        first_state = self.get_sub_state("start")
+        if first_state:
+            potential_new_state_name = first_state.process_event("auto")
+            print(f"potential_new_state_name={potential_new_state_name}")
+            if potential_new_state_name != "":
+                return_state = self.get_sub_state(potential_new_state_name)
+                return_state.enter()
+
+        return return_state
 
     def exit(self) -> None:
-        #print(f"Exiting state \"{self.get_name()}\".")
+        debug_flags.print("enter_exit", f"[{self.get_name()}] Exiting\n")
         run_user_functions(self.exit_funcs, self.callback_module)
         return
 
@@ -309,7 +324,10 @@ class state:
         return self.path
 
     def get_name(self) -> str:
-        return self.path.split('.')[-1]
+        if debug_flags.get("show_short_state_names"):
+            return self.path.split('.')[-1]
+        else:
+            return self.path
 
     def get_start_state(self) -> object:
         return self.start_state
@@ -321,9 +339,14 @@ class state:
         new_state_path = ""
 
         for transition in self.transitions:
-            #print(f"    trans-check: {event_to_process} vs {transition.source_state.get_name()}, {transition.event_name}, {transition.conditions}, {transition.actions}, {transition.destination_state}")
             if transition.would_activate(event_to_process):
+                debug_flags.print("transitions", f"[{self.get_name()}] transitioning via {transition.event_name}, {transition.conditions}, {transition.actions}, {transition.destination_state}\n")
                 new_state_path = transition.execute(event_to_process)
+                if new_state_path.find('.') == -1:
+                    # Allow for sub_state_path to be just the name of the most-nested state
+                    # being referenced, so that the machine definition remains much more
+                    # readable.
+                    new_state_path = self.parent_state.path + '.' + new_state_path
                 break;
 
         if new_state_path == "" and event_to_process != "auto" and self.parent_state:
@@ -339,13 +362,16 @@ class state:
 
         return new_state_path
 
-    def get_sub_state(self, sub_state_name: str) -> object:
+    def get_sub_state(self, sub_state_path: str) -> object:
         sub_state = None
-
+        if sub_state_path != "root" and sub_state_path.find('.') == -1:
+            # Allow for sub_state_path to be just the name of the most-nested state
+            # being referenced, so that the machine definition remains much more
+            # readable.
+            sub_state_path = self.get_path() + '.' + sub_state_path
         for sub_state_check in self.sub_states:
-            if sub_state_check.get_name() == sub_state_name:
+            if sub_state_check.get_path() == sub_state_path:
                 sub_state = sub_state_check
-                #print(f"sub_state={sub_state.get_name()}")
                 break;
 
         return sub_state
@@ -362,8 +388,6 @@ class state:
                 indent_str = '  ' * ( self.level - 1 )
 
         name = self.get_name()
-        if debug_flags.get("use_full_paths"):
-            name = self.get_path()
 
         state_as_string  = f"{indent_str}{{{name}}}\n"
         if len(self.entry_funcs):

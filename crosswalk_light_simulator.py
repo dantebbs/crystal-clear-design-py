@@ -14,7 +14,8 @@ implementation of a crosswalk! It was selected for its familiarity to anyone
 learning about the library, and is only to be used for demonstrating the various
 features of the state_machine library module, and its use. This example does not
 meet necessary safety requirements such as handling power outages, burned out
-lights, emergency vehicle approaches, nor other possible events and usages.
+lights, emergency vehicle approaches, additional sensors, audio indicators,
+nor other possible events and usages.
 """
 
 pedestrian_crosswalk_signals = """
@@ -22,6 +23,7 @@ pedestrian_crosswalk_signals = """
   "events": [
     "button_push",
     "countdown_complete",
+    "flash_complete",
     "one_second"
   ],
   "states": {
@@ -34,19 +36,52 @@ pedestrian_crosswalk_signals = """
     },
     "Traffic Flowing": {
       "entry": [
-        "set_traf_light(yel)",
         "set_ped_light(red)"
+      ],
+      "exit": [
+        "cancel_flash()"
       ],
       "tran": {
         "button_push": {
           "dest": "Traffic Stopping"
+        }
+      },
+      "states": {
+        "start": {
+          "tran": {
+            "auto": {
+              "dest": "Yel Lght On"
+            }
+          }
+        },
+        "Yel Lght On": {
+          "entry": [
+            "set_traf_light(yel)",
+            "start_flash(800)"
+          ],
+          "tran": {
+            "flash_complete": {
+              "dest": "Yel Lght Off"
+            }
+          }
+        },
+        "Yel Lght Off": {
+          "entry": [
+            "set_traf_light(blk)",
+            "start_flash(800)"
+          ],
+          "tran": {
+            "flash_complete": {
+              "dest": "Yel Lght On"
+            }
+          }
         }
       }
     },
     "Traffic Stopping": {
       "entry": [
         "set_traf_light(yel)",
-        "start_countdown(5)"
+        "start_countdown(5000)"
       ],
       "tran": {
         "countdown_complete": {
@@ -58,13 +93,13 @@ pedestrian_crosswalk_signals = """
       "entry": [
         "set_traf_light(red)",
         "set_ped_light(grn)",
-        "start_countdown(5)"
+        "start_countdown(5000)"
       ],
       "tran": {
         "countdown_complete": {
           "acts": [
             "set_ped_light(yel)",
-            "start_countdown(10)",
+            "start_countdown(10000)",
             "start_ped_time(10)"
           ],
           "dest": "Crossing Countdown"
@@ -72,18 +107,49 @@ pedestrian_crosswalk_signals = """
       }
     },
     "Crossing Countdown": {
+      "exit": [
+        "cancel_flash()"
+      ],
       "tran": {
-        "one_second": {
-          "acts": [
-            "update_ped_time()"
-          ],
-          "dest": "Crossing Countdown"
-        },
         "countdown_complete": {
           "acts": [
             "update_ped_time()"
           ],
           "dest": "Traffic Flowing"
+        }
+      },
+      "states": {
+        "start": {
+          "tran": {
+            "auto": {
+              "dest": "Yel Hand On"
+            }
+          }
+        },
+        "Yel Hand On": {
+          "entry": [
+            "set_ped_light(yel)",
+            "start_flash(400)"
+          ],
+          "tran": {
+            "flash_complete": {
+              "dest": "Yel Hand Off"
+            }
+          }
+        },
+        "Yel Hand Off": {
+          "entry": [
+            "set_ped_light(blk)",
+            "start_flash(600)"
+          ],
+          "exit": [
+            "update_ped_time()"
+          ],
+          "tran": {
+            "flash_complete": {
+              "dest": "Yel Hand On"
+            }
+          }
         }
       }
     }
@@ -96,7 +162,7 @@ import sys
 try:
     import curses
 except:
-    print("This test script requires the 'curses' module. Before trying again, run: pip install windows-curses")
+    print("This example script requires the 'curses' module. Before trying again, run: pip install windows-curses")
     exit(1)
 import ascii_crosswalk
 
@@ -125,8 +191,17 @@ def set_ped_light(color: str) -> bool:
 def start_countdown(time_s: str) -> bool:
     time_s_int = int(time_s, 10)
     #global ascii
-    #ascii.print_status(f"Starting countdown of {time_s_int} seconds.")
-    crosswalk.add_timer("countdown_complete", time_s_int * 1000)
+    #ascii.print_status(f"Starting countdown of {time_s_int} milliseconds.")
+    crosswalk.add_timer("countdown_complete", time_s_int)
+    return True
+
+def start_flash(time_s: str) -> bool:
+    time_s_int = int(time_s, 10)
+    crosswalk.add_timer("flash_complete", time_s_int)
+    return True
+
+def cancel_flash(unused: str) -> bool:
+    crosswalk.rem_timer_by_evt("flash_complete")
     return True
 
 ped_count_down_s = 0
@@ -134,7 +209,6 @@ def start_ped_time(time_s: str) -> bool:
     time_s_int = int(time_s, 10)
     global ped_count_down_s
     ped_count_down_s = time_s_int
-    crosswalk.add_timer("one_second", 1000, time_s_int)
     update_ped_time()
     return True
 
@@ -143,6 +217,7 @@ def update_ped_time(unused = "") -> bool:
     ped_count_down_s -= 1
     global ascii
     ascii.print_status(f"Showing pedestrian countdown of {ped_count_down_s} seconds.")
+    print(f"Showing pedestrian countdown of {ped_count_down_s} seconds.")
     ascii.set_ped_time(ped_count_down_s)
     ascii.draw_ped_sig()
     return True
@@ -155,17 +230,12 @@ def main(stdscr):
     # Set desired flags before instantiation.
     #state_machine.debug_flags.set("machine_parse")
     #state_machine.debug_flags.set("execution_details")
+    state_machine.debug_flags.set("enter_exit")
+    state_machine.debug_flags.set("transitions")
 
     # Now that all the call-back functions are defined, create the machine.
     global crosswalk
     crosswalk = state_machine.state_machine( pedestrian_crosswalk_signals, callbacks_module, proc_period_ms )
-
-    ascii.print_status("-----------------------------")
-    ascii.print_status("| Crosswalk Light Simulator |")
-    ascii.print_status("-----------------------------")
-    ascii.print_status("")
-    ascii.print_status("Press 'b' to request a crossing, press 'esc' to exit simulation.")
-    ascii.print_status("")
 
     global quit
     while (not quit):
